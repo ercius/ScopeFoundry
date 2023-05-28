@@ -7,7 +7,7 @@ from ScopeFoundry.helper_funcs import load_qt_ui_file, sibling_path,\
     load_qt_ui_from_pkg
 from ScopeFoundry.widgets import RegionSlicer
 from collections import OrderedDict
-import os
+#import os
 from qtpy import QtCore, QtWidgets, QtGui
 import pyqtgraph as pg
 import pyqtgraph.dockarea as dockarea
@@ -20,6 +20,7 @@ import h5py
 from datetime import datetime
 
 import imageio
+import ncempy
 
 class DataBrowser(BaseApp):
     
@@ -117,7 +118,7 @@ class DataBrowser(BaseApp):
         return new_view
 
     def on_change_data_filename(self):
-        fname = self.settings['data_filename'] 
+        fname = Path(self.settings['data_filename'])
         if fname == "0":
             print("initial file 0")
             return
@@ -132,7 +133,7 @@ class DataBrowser(BaseApp):
                 self.settings['view_name'] = view_name
             else:
                 # force update
-                if  os.path.isfile(fname):
+                if fname.is_file():
                     self.current_view.on_change_data_filename(fname)
 
     @QtCore.Slot()
@@ -169,8 +170,8 @@ class DataBrowser(BaseApp):
         self.current_view.ui.show()
         
         # set datafile for new (current) view
-        fname = self.settings['data_filename']
-        if  os.path.isfile(fname):
+        fname = Path(self.settings['data_filename'])
+        if  fname.is_file():
             self.current_view.on_change_data_filename(self.settings['data_filename'])
 
     def on_treeview_selection_change(self, sel, desel):
@@ -268,8 +269,7 @@ class ncemView(DataBrowserView):
     """ Data browser for common NCEM file types
     
     """
-    
-    
+
     # This name is used in the GUI for the DataBrowser
     name = 'ncem_view'
     
@@ -288,9 +288,10 @@ class ncemView(DataBrowserView):
         return ext.lower() in ['.dm3', 'dm4']
 
     def on_change_data_filename(self, fname):
-        #  A new file has been selected by the user, load and display it
+        """  A new file has been selected by the user, load and display it
+        """
         try:
-            self.data = imageio.imread(fname)
+            self.data = ncempy.read(fname)['data']
             self.imview.setImage(self.data.swapaxes(0, 1))
         except Exception as err:
         	# When a failure to load occurs, zero out image
