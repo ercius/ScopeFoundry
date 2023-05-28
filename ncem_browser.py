@@ -1,6 +1,7 @@
 from __future__ import division, print_function, absolute_import
 
 from pathlib import Path
+import functools
 
 from ScopeFoundry import BaseApp
 from ScopeFoundry.helper_funcs import load_qt_ui_file, sibling_path,\
@@ -55,10 +56,9 @@ class DataBrowser(BaseApp):
         
         self.settings.data_filename.add_listener(self.on_change_data_filename)
 
-        self.settings.New('auto_select_view',dtype=bool, initial=True)
+        self.settings.New('auto_select_view',dtype=bool, initial=False)
 
         self.settings.New('view_name', dtype=str, initial='0', choices=('0',))
-        
         
         # UI Connections
         self.settings.data_filename.connect_to_browse_widgets(self.ui.data_filename_lineEdit, 
@@ -85,12 +85,12 @@ class DataBrowser(BaseApp):
         self.settings['browse_dir'] = Path.home()
 
         # set views
-        self.load_view(FileInfoView(self))
-        self.load_view(imageioView(self))
         self.load_view(ncemView(self))
-        
+        self.load_view(imageioView(self))
+        self.load_view(MetadataView(self))
+
         self.settings.view_name.add_listener(self.on_change_view_name)
-        self.settings['view_name'] = "file_info"
+        self.settings['view_name'] = "ncem_view"
         
         self.settings.file_filter.add_listener(self.on_change_file_filter)
         
@@ -208,31 +208,10 @@ class DataBrowserView(QtCore.QObject):
         # update display
         
     def is_file_supported(self, fname):
-        # returns whether view can handle file, should return False early to avoid
-        # too much computation when selecting a file
+        """ returns whether view can handle file, should return False early to avoid
+         too much computation when selecting a file
+         """
         return False
-        
-class FileInfoView(DataBrowserView):
-    
-    name = 'file_info'
-    
-    def setup(self):
-        self.ui = QtWidgets.QTextEdit("file_info")
-        
-    def on_change_data_filename(self, fname=None):
-        if fname is None:
-            fname = self.databrowser.settings['data_filename']
-
-        ext = Path(fname).suffix
-        
-        if ext in ('.py', '.ini', '.txt'):
-            with open(fname, 'r') as f:
-                self.ui.setText(f.read())
-        else:
-            self.ui.setText(fname)
-        
-    def is_file_supported(self, fname):
-        return True
 
 class imageioView(DataBrowserView):
 
@@ -251,7 +230,6 @@ class imageioView(DataBrowserView):
         ext = Path(fname).suffix
         return ext.lower() in ['.png', '.tif', '.tiff', '.jpg']
 
-        
     def on_change_data_filename(self, fname):
         #  A new file has been selected by the user, load and display it
         try:
@@ -285,21 +263,169 @@ class ncemView(DataBrowserView):
          here we are using the file extension to make a guess
         """
         ext = Path(fname).suffix
-        return ext.lower() in ['.dm3', 'dm4']
+        return ext.lower() in ['.dm3', '.dm4', '.mrc', '.ali', '.rec', '.emd']
 
     def on_change_data_filename(self, fname):
         """  A new file has been selected by the user, load and display it
         """
         try:
             self.data = ncempy.read(fname)['data']
-            self.imview.setImage(self.data.swapaxes(0, 1))
+            # self.imview.setImage(self.data.swapaxes(0, 1))
+            self.imview.setImage(self.data)
         except Exception as err:
         	# When a failure to load occurs, zero out image
         	# and show error message
             self.imview.setImage(np.zeros((10,10)))
             self.databrowser.ui.statusbar.showMessage(
-            	"failed to load %s:\n%s" %(fname, err))
+            	f'failed to load {fname}:\n{err}')
             raise(err)
+
+class MetadataView(DataBrowserView):
+    """ A viewer to read meta data from a file and display it as text.
+    
+    """
+    name = 'metadata_info'
+    
+    def setup(self):
+        self.ui = QtWidgets.QTextEdit("File metadata")
+    
+    @staticmethod
+    @functools.lru_cache(maxsize=10, typed=False)
+    def get_dm_metadata(fname):
+        metaData = {}
+        with ncempy.io.dm.fileDM(fname, on_memory=True) as dm1:
+            # Only keep the most useful tags as meta data
+            for kk, ii in dm1.allTags.items():
+                # Most useful starting tags
+                prefix1 = 'ImageList.{}.ImageTags.'.format(dm1.numObjects)
+                prefix2 = 'ImageList.{}.ImageData.'.format(dm1.numObjects)
+                pos1 = kk.find(prefix1)
+                pos2 = kk.find(prefix2)
+                if pos1 > -1:
+                    sub = kk[pos1 + len(prefix1):]
+                    metaData[sub] = ii
+                elif pos2 > -1:
+                    sub = kk[pos2 + len(prefix2):]
+                    metaData[sub] = ii
+
+                # Remove unneeded keys
+                for jj in list(metaData):
+                    if jj.find('frame sequence') > -1:
+                        del metaData[jj]
+                    elif jj.find('Private') > -1:
+                        del metaData[jj]
+                    elif jj.find('Reference Images') > -1:
+                        del metaData[jj]
+                    elif jj.find('Frame.Intensity') > -1:
+                        del metaData[jj]
+                    elif jj.find('Area.Transform') > -1:
+                        del metaData[jj]
+                    elif jj.find('Parameters.Objects') > -1:
+                        del metaData[jj]
+                    elif jj.find('Device.Parameters') > -1:
+                        del metaData[jj]
+
+            # Store the X and Y pixel size, offset and unit
+            try:
+                metaData['PhysicalSizeX'] = metaData['Calibrations.Dimension.1.Scale']
+                metaData['PhysicalSizeXOrigin'] = metaData['Calibrations.Dimension.1.Origin']
+                metaData['PhysicalSizeXUnit'] = metaData['Calibrations.Dimension.1.Units']
+                metaData['PhysicalSizeY'] = metaData['Calibrations.Dimension.2.Scale']
+                metaData['PhysicalSizeYOrigin'] = metaData['Calibrations.Dimension.2.Origin']
+                metaData['PhysicalSizeYUnit'] = metaData['Calibrations.Dimension.2.Units']
+            except:
+                metaData['PhysicalSizeX'] = 1
+                metaData['PhysicalSizeXOrigin'] = 0
+                metaData['PhysicalSizeXUnit'] = ''
+                metaData['PhysicalSizeY'] = 1
+                metaData['PhysicalSizeYOrigin'] = 0
+                metaData['PhysicalSizeYUnit'] = ''
+
+        return metaData
+    
+    @functools.lru_cache(maxsize=10, typed=False)
+    @staticmethod
+    def get_mrc_metadata(fname):
+        metaData = {}
+
+        # Open file and parse the header
+        with mrc.fileMRC(path) as mrc1:
+            pass
+
+        # Save most useful metaData
+        metaData['axisOrientations'] = mrc1.axisOrientations  # meta data information from the mrc header
+        metaData['cellAngles'] = mrc1.cellAngles
+
+        if hasattr(mrc1, 'FEIinfo'):
+            # add in the special FEIinfo if it exists
+            try:
+                metaData.update(mrc1.FEIinfo)
+            except TypeError:
+                pass
+
+        # Store the X and Y pixel size, offset and unit
+        # Test for bad pixel sizes which happens often
+        if mrc1.voxelSize[2] > 0:
+            metaData['PhysicalSizeX'] = mrc1.voxelSize[2] * 1e-10  # change Angstroms to meters
+            metaData['PhysicalSizeXOrigin'] = 0
+            metaData['PhysicalSizeXUnit'] = 'm'
+        else:
+            metaData['PhysicalSizeX'] = 1
+            metaData['PhysicalSizeXOrigin'] = 0
+            metaData['PhysicalSizeXUnit'] = ''
+        if mrc1.voxelSize[1] > 0:
+            metaData['PhysicalSizeY'] = mrc1.voxelSize[1] * 1e-10  # change Angstroms to meters
+            metaData['PhysicalSizeYOrigin'] = 0
+            metaData['PhysicalSizeYUnit'] = 'm'
+        else:
+            metaData['PhysicalSizeY'] = 1
+            metaData['PhysicalSizeYOrigin'] = 0
+            metaData['PhysicalSizeYUnit'] = ''
+
+        metaData['FileName'] = path
+
+        rawtltName = Path(path).with_suffix('.rawtlt')
+        if rawtltName.exists():
+            with open(rawtltName, 'r') as f1:
+                tilts = map(float, f1)
+            metaData['tilt angles'] = tilts
+
+        FEIparameters = Path(path).with_suffix('.txt')
+        if FEIparameters.exists():
+            with open(FEIparameters, 'r') as f2:
+                lines = f2.readlines()
+            pp1 = list([ii[18:].strip().split(':')] for ii in lines[3:-1])
+            pp2 = {}
+            for ll in pp1:
+                try:
+                    pp2[ll[0]] = float(ll[1])
+                except:
+                    pass  # skip lines with no data
+            metaData.update(pp2)
+
+        return metaData
+    
+    def on_change_data_filename(self, fname=None):
+        if fname is None:
+            fname = self.databrowser.settings['data_filename']
+
+        ext = Path(fname).suffix
+        
+        meta_data = {'file name': str(fname)}
+        if ext in ('.dm3', '.dm4'):
+            meta_data = self.get_dm_metadata(fname)
+        elif ext in ('.mrc', '.rec', '.ali'):
+            meta_data = self.get_mrc_metadata(fname)
+            
+        txt = f'file name = {fname}\n'
+        for k, v in meta_data.items():
+            line = f'{k} = {v}\n'
+            txt += line
+        self.ui.setText(txt)
+        
+    def is_file_supported(self, fname):
+        ext = Path(fname).suffix
+        return ext.lower() in ('.dm3', '.dm4', '.mrc', '.ali', '.rec')
 
 if __name__ == '__main__':
     import sys
