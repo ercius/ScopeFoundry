@@ -74,12 +74,9 @@ class DataBrowser(BaseApp):
         self.ui.treeView.setModel(self.fs_model)
         self.ui.treeView.setIconSize(QtCore.QSize(16,16))
         self.ui.treeView.setSortingEnabled(True)
-        #for i in (1,2,3):
-        #    self.ui.treeView.hideColumn(i)
-        #print("="*80, self.ui.treeView.selectionModel())
+
         self.tree_selectionModel = self.ui.treeView.selectionModel()
         self.tree_selectionModel.selectionChanged.connect(self.on_treeview_selection_change)
-
 
         self.settings.browse_dir.add_listener(self.on_change_browse_dir)
         self.settings['browse_dir'] = Path.home()
@@ -93,8 +90,7 @@ class DataBrowser(BaseApp):
         self.settings['view_name'] = "ncem_view"
         
         self.settings.file_filter.add_listener(self.on_change_file_filter)
-        
-        #self.console_widget.show()
+
         self.ui.console_pushButton.clicked.connect(self.console_widget.show)
         self.ui.log_pushButton.clicked.connect(self.logging_widget.show)
         self.ui.show()
@@ -176,16 +172,16 @@ class DataBrowser(BaseApp):
 
     def on_treeview_selection_change(self, sel, desel):
         fname = self.fs_model.filePath(self.tree_selectionModel.currentIndex())
-        self.settings['data_filename'] = fname
+        self.settings['data_filename'] = Path(fname)
 #        print( 'on_treeview_selection_change' , fname, sel, desel)
 
     def auto_select_view(self, fname):
-        "return the name of the last supported view for the given fname"
+        """return the name of the last supported view for the given fname"""
         for view_name, view in list(self.views.items())[::-1]:
             if view.is_file_supported(fname):
                 return view_name
         # return default file_info view if no others work
-        return 'file_info'
+        return 'ncem_view'
         
 
 class DataBrowserView(QtCore.QObject):
@@ -227,7 +223,7 @@ class imageioView(DataBrowserView):
     	 # Tells the DataBrowser whether this plug-in would likely be able
     	 # to read the given file name
     	 # here we are using the file extension to make a guess
-        ext = Path(fname).suffix
+        ext = fname.suffix
         return ext.lower() in ['.png', '.tif', '.tiff', '.jpg']
 
     def on_change_data_filename(self, fname):
@@ -262,7 +258,7 @@ class ncemView(DataBrowserView):
          to read the given file name
          here we are using the file extension to make a guess
         """
-        ext = Path(fname).suffix
+        ext = fname.suffix
         return ext.lower() in ['.dm3', '.dm4', '.mrc', '.ali', '.rec', '.emd']
 
     def on_change_data_filename(self, fname):
@@ -343,13 +339,13 @@ class MetadataView(DataBrowserView):
 
         return metaData
     
-    @functools.lru_cache(maxsize=10, typed=False)
     @staticmethod
-    def get_mrc_metadata(fname):
+    @functools.lru_cache(maxsize=10, typed=False)
+    def get_mrc_metadata(path):
         metaData = {}
 
         # Open file and parse the header
-        with mrc.fileMRC(path) as mrc1:
+        with ncempy.io.mrc.fileMRC(path) as mrc1:
             pass
 
         # Save most useful metaData
@@ -405,10 +401,63 @@ class MetadataView(DataBrowserView):
 
         return metaData
     
-    def on_change_data_filename(self, fname=None):
-        if fname is None:
-            fname = self.databrowser.settings['data_filename']
+    @staticmethod
+    @functools.lru_cache(maxsize=10, typed=False)
+    def get_emd_metadata(path):
+        metaData = {}
+        with ncempy.io.emd.fileEMD(path) as emd0:        
+            metaData.update(emd0.user.attrs)
+            metaData.update(emd0.microscope.attrs)
+            metaData.update(emd0.sample.attrs)
+            dims = emd0.get_emddims(emd0.list_emds[0])
+            dimX = dims[-1]
+            dimY = dims[-2]
+            metaData['PhysicalSizeX'] = dimX[0][1] - dimX[0][0]
+            metaData['PhysicalSizeXOrigin'] = dimX[0][0]
+            metaData['PhysicalSizeXUnit'] = dimX[2].replace('_', '')
+            metaData['PhysicalSizeY'] = dimY[0][1] - dimY[0][0]
+            metaData['PhysicalSizeYOrigin'] = dimY[0][0]
+            metaData['PhysicalSizeYUnit'] = dimY[2].replace('_', '')
+        return metaData
 
+
+    @staticmethod
+    @functools.lru_cache(maxsize=10, typed=False)
+    def get_velox_metadata(path):
+        import json
+        metaData = {}
+        with ncempy.io.emdVelox.fileEMDVelox(path) as f0:
+            dataGroup = emd_obj.list_data[0]
+            dataset0 = dataGroup['Data']
+
+            # Convert JSON metadata to dict
+            mData = emd_obj.list_data[0]['Metadata'][:, 0]
+            validMetaDataIndex = npwhere(mData > 0)  # find valid metadata
+            mData = mData[validMetaDataIndex].tostring()  # change to string
+            mDataS = json.loads(mData.decode('utf-8', 'ignore'))  # load UTF-8 string as JSON and output dict
+            metaData['pixel sizes'] = []
+            metaData['pixel units'] = []
+            try:
+                # Store the X and Y pixel size, offset and unit
+                metaData['PhysicalSizeX'] = float(mDataS['BinaryResult']['PixelSize']['width'])
+                metaData['PhysicalSizeXOrigin'] = float(mDataS['BinaryResult']['Offset']['x'])
+                metaData['PhysicalSizeXUnit'] = mDataS['BinaryResult']['PixelUnitX']
+                metaData['PhysicalSizeY'] = float(mDataS['BinaryResult']['PixelSize']['height'])
+                metaData['PhysicalSizeYOrigin'] = float(mDataS['BinaryResult']['Offset']['y'])
+                metaData['PhysicalSizeYUnit'] = mDataS['BinaryResult']['PixelUnitY']
+            except:
+                metaData['PhysicalSizeX'] = 1
+                metaData['PhysicalSizeXOrigin'] = 0
+                metaData['PhysicalSizeXUnit'] = ''
+                metaData['PhysicalSizeY'] = 1
+                metaData['PhysicalSizeYOrigin'] = 0
+                metaData['PhysicalSizeYUnit'] = ''
+
+            metaData.update(mDataS)
+
+            metaData['shape'] = dataset0.shape
+    
+    def on_change_data_filename(self, fname):
         ext = Path(fname).suffix
         
         meta_data = {'file name': str(fname)}
@@ -416,7 +465,13 @@ class MetadataView(DataBrowserView):
             meta_data = self.get_dm_metadata(fname)
         elif ext in ('.mrc', '.rec', '.ali'):
             meta_data = self.get_mrc_metadata(fname)
-            
+        elif ext in ('.emd',):
+            with ncempy.io.emd.fileEMD(fname) as emd0:
+                if len(emd0.list_emds) > 0:
+                    meta_data = self.get_emd_metadata(fname)
+                else:
+                    meta_data = self.get_velox_metadata(fname)
+        
         txt = f'file name = {fname}\n'
         for k, v in meta_data.items():
             line = f'{k} = {v}\n'
@@ -424,7 +479,7 @@ class MetadataView(DataBrowserView):
         self.ui.setText(txt)
         
     def is_file_supported(self, fname):
-        ext = Path(fname).suffix
+        ext = fname.suffix
         return ext.lower() in ('.dm3', '.dm4', '.mrc', '.ali', '.rec')
 
 if __name__ == '__main__':
