@@ -270,9 +270,9 @@ class ncemView(DataBrowserView):
         """
         try:
             self.data = np.squeeze(ncempy.read(fname)['data'])
-            if self.data.ndim > 3:
-                print(f'Warning: Reducing {self.data.ndim}-D data to 3D.')
-                self.data = self.data[...,:,:,:]
+            if self.data.ndim == 4:
+                print(f'Warning: Reducing {self.data.ndim}-D data to 3-D.')
+                self.data = self.data[0,:,:,:]
             self.imview.setImage(self.data)
         except Exception as err:
         	# When a failure to load occurs, zero out image
