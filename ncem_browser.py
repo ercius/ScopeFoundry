@@ -269,8 +269,10 @@ class ncemView(DataBrowserView):
         """  A new file has been selected by the user, load and display it
         """
         try:
-            self.data = ncempy.read(fname)['data']
-            # self.imview.setImage(self.data.swapaxes(0, 1))
+            self.data = np.squeeze(ncempy.read(fname)['data'])
+            if self.data.ndim > 3:
+                print(f'Warning: Reducing {self.data.ndim}-D data to 3D.')
+                self.data = self.data[...,:,:,:]
             self.imview.setImage(self.data)
         except Exception as err:
         	# When a failure to load occurs, zero out image
