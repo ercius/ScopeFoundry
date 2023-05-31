@@ -40,12 +40,16 @@ class DataBrowser(BaseApp):
                 if val is not None:
                     lq.update_value(val)
         
+        
     def setup(self):
 
         #self.ui = load_qt_ui_file(sibling_path(__file__, "data_browser.ui"))
         self.ui = load_qt_ui_from_pkg('ScopeFoundry', 'data_browser.ui')
         self.ui.show()
         self.ui.raise_()
+        
+        self.ui.setWindowTitle("ScopeFoundry: NCEM Data Browser")
+        self.ui.setWindowIcon(QtGui.QIcon('scopefoundry_logo2C_1024.png'))
         
         self.views = OrderedDict()        
         self.current_view = None        
