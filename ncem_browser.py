@@ -20,7 +20,7 @@ import time
 import h5py
 from datetime import datetime
 
-import imageio
+import imageio.v3 as iio
 import ncempy
 
 class DataBrowser(BaseApp):
@@ -233,7 +233,7 @@ class imageioView(DataBrowserView):
     def on_change_data_filename(self, fname):
         #  A new file has been selected by the user, load and display it
         try:
-            self.data = imageio.imread(fname)
+            self.data = iio.imread(fname)
             self.imview.setImage(self.data.swapaxes(0, 1))
         except Exception as err:
         	# When a failure to load occurs, zero out image
